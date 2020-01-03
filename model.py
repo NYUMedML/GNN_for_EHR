@@ -79,8 +79,7 @@ class SpGraphAttentionLayer(nn.Module):
             data = self.embed(torch.arange(N).long().cuda())
             h_prime = torch.cat([self.attention(l, a, N, data, edge) for l, a in zip(self.W, self.a)], dim=1)
         else:
-            h_prime = torch.stack([self.attention(l, a, N, data, edge) for l, a in zip(self.W, self.a)], dim=0).mean(
-                dim=0)
+            h_prime = torch.stack([self.attention(l, a, N, data, edge) for l, a in zip(self.W, self.a)], dim=0).mean(dim=0)
 
         if self.concat:
             # if this layer is not last layer,
@@ -107,7 +106,7 @@ class GAT(nn.Module):
             device = 'cuda'
         else:
             raise Exception('No CUDA')
-        length = data.size()[1]
+        length = data.size()[0]
         nonzero = data.nonzero()
         if nonzero.size()[0] == 0:
             return torch.LongTensor([[0], [0]]).to(device), torch.LongTensor([[length + 1], [length + 1]]).to(device)

@@ -5,7 +5,9 @@ import torch
 
 
 def load_pickle(fname):
-    return pickle.load(open(fname, 'rb'))
+    with open(fname, 'rb') as f:  
+        return pickle.load(f)
+
 
 
 def downsample(train_idx, neg_young, train_idx_pos):
@@ -24,13 +26,11 @@ class OriginalData:
         self.y = load_pickle(path + 'y_bin.pkl')
         
     def datasampler(self, idx_path, train = True):
-        idx = pickle.load(self.path + idx_path)
-        x = self.x[idx]
-        y = self.y[idx]
+        idx = load_pickle(self.path + idx_path)
         if train:
-            downsample_idx = downsample(idx, load_pickle(self.path + 'neg_young.pkl'), idx[y == 1])
-            return x[downsample_idx, :], y[downsample_idx]
-        return x, y
+            downsample_idx = downsample(idx, load_pickle(self.path + 'neg_young.pkl'), idx[self.y[idx] == 1])
+            return self.x[downsample_idx, :], self.y[downsample_idx]
+        return self.x, self.y
 
 
 class EHRData(Dataset):

@@ -54,12 +54,12 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--input', type=int, default=512, help='size of input size')
 parser.add_argument('--output', type=int, default=512, help='size of output size')
 parser.add_argument('--heads', type=int, default=4, help='number of attention heads')
-parser.add_argument('--batch',  type=int, default=48, help='batch size')
+parser.add_argument('--batch',  type=int, default=16, help='batch size')
 parser.add_argument('--dropout',  default='0.4', type=float, help='dropout rate')
 parser.add_argument('--alpha',  default='0.15', type=float, help='activation rate')
 parser.add_argument('--lr',  default='0.0001', type=float, help='learning rate')
 parser.add_argument('--epoch',  default=20, type=int, help='max epoch')
-parser.add_argument('--path',  default='./', help='path of files')
+parser.add_argument('--path',  default='./data/', help='path of files')
 parser.add_argument('--result',  default='./result', help='path of results')
 
 
@@ -76,14 +76,15 @@ dropout = opt.dropout
 alpha = opt.alpha
 lr = opt.lr
 
-num_of_nodes = 3588
+num_of_nodes = 3589
 train_idx_name = 'train_idx.pkl'
 val_idx_name = 'val_idx.pkl'
 test_idx_name = 'test_idx.pkl'
 
 s = datetime.now().strftime('%Y%m%d%H%M%S')
-result_root = '%s/%s-lr_%s-k_%s-d_%s-s_%s'%(opt.result, s, opt.lr, opt.input, opt.output, opt.droput)
-if not os.path.exists(result_root): os.mkdir(result_root)
+result_root = '%s/%s-lr_%s-input_%s-output_%s-dropout_%s'%(opt.result, s, opt.lr, opt.input, opt.output, opt.dropout)
+if not os.path.exists(result_root):
+    os.mkdir(result_root)
 
 logging.basicConfig(filename='%s/train.log'%result_root, format='%(asctime)s %(message)s', level=logging.INFO)
 data = OriginalData(path)
@@ -91,25 +92,23 @@ device_ids = list(np.arange(torch.cuda.device_count(), dtype='int'))
 device_ids = range(torch.cuda.device_count())
 model = GAT(in_feature, out_feature, num_of_nodes, n_heads, dropout=dropout, alpha = alpha).to(device)
 model = nn.DataParallel(model, device_ids=device_ids)
-model.load_state_dict(torch.load('normed_model.pth'))
 optimizer = optim.Adam([p for p in model.parameters() if p.requires_grad], lr=lr, weight_decay=0)
 scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=[lambda count: 0.9 ** count])
-
-
-val_loader = DataLoader(dataset=EHRData(OriginalData.datasampler(val_idx_name, train=False)), batch_size=1,
+val_x, val_y = data.datasampler(val_idx_name, train=False)
+val_loader = DataLoader(dataset=EHRData(val_x, val_y), batch_size=BATCH_SIZE,
                         collate_fn=collate_fn, num_workers=torch.cuda.device_count(), shuffle=False)
 
 for epoch in range(epoch):
     total_loss = 0
-    x_train, y_train = OriginalData.datasampler(train_idx_name, train=True)
+    x_train, y_train = data.datasampler(train_idx_name, train=True)
     ratio = Counter(y_train)
-    train_loader = DataLoader(dataset=EHRData(EHRData(x_train,y_train)), batch_size=1,
+    train_loader = DataLoader(dataset=EHRData(x_train,y_train), batch_size=BATCH_SIZE,
                               collate_fn=collate_fn, num_workers=torch.cuda.device_count(), shuffle=True)
     weight = torch.from_numpy((ratio[True]+ratio[False])/(2 * np.array([ratio[False],ratio[True]]))).float().to(device)
     criterion = nn.CrossEntropyLoss(weight=weight)
 
     if epoch % 5 == 0:
-        val_auprc = evaluate(model, val_loader, len(val_loader))
+        val_auprc = evaluate(model, val_loader, len(val_y))
         logging.info('epoch:%d AUPRC:%f' % (epoch + 1, val_auprc))
 
     t = tqdm(iter(train_loader), leave=True, total=len(train_loader))
