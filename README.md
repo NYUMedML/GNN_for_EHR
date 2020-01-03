@@ -1,6 +1,6 @@
 # Graph Neural Network on Electronic Health Records for Predicting Alzheimer’s Disease
 
-This repository contains the code for the paper **Graph Neural Network on Electronic Health Records for Predicting Alzheimer’s Disease**.
+This repository contains the code for the paper [Graph Neural Network on Electronic Health Records for Predicting Alzheimer’s Disease](https://arxiv.org/abs/1912.03761).
 
 ![image](https://github.com/NYUMedML/GNN_for_EHR/blob/master/plots/model.png)
 
