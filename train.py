@@ -1,131 +1,108 @@
+import argparse
+import torch
+import numpy as np
 import torch.nn as nn
 from torch import optim
 from torch.utils.data import DataLoader
-import os
 from collections import Counter
-from dataloader import *
-from model import *
+import pickle
 from tqdm import tqdm
-import logging
 from datetime import datetime
-import argparse
-from sklearn.metrics import precision_recall_curve, auc
-
-
-def train(data, model, optim, criterion, max_clip_norm=0):
-    input = data[:, :-1].to(device)
-    label = data[:,-1].to(device)
-    model.train()
-    optim.zero_grad()
-    logits = model(input)
-    loss = criterion(logits, label)
-    torch.nn.utils.clip_grad_norm_(model.parameters(), max_clip_norm)
-    loss.backward()
-    optim.step()
-    return loss.item()
-
-
-def evaluate(model, data_iter, length):
-    model.eval()
-    y_pred = np.zeros(length)
-    y_true = np.zeros(length)
-    y_prob = np.zeros(length)
-    pointer = 0
-    for data in data_iter:
-        batch_size = data.size()[0]
-        input = data[:, :-1].to(device)
-        label = data[:, -1].to(device)
-        output = model(input)
-        _, predicted = torch.max(output.data, 1)
-        probability = torch.softmax(output.data, 1)[:, 1]
-        y_true[pointer: pointer + batch_size] = label.cpu().numpy()
-        y_pred[pointer: pointer + batch_size] = predicted.cpu().numpy()
-        y_prob[pointer: pointer + batch_size] = probability.cpu().numpy()
-        pointer += batch_size
-    precision, recall, thresholds = precision_recall_curve(y_true, y_prob)
-    return auc(recall, precision)
-
-
+from model import VariationalGNN
+from utils import train, evaluate, EHRData, collate_fn
+import os
+import logging
 if torch.cuda.is_available():
     device = 'cuda'
 else:
-    raise Exception('No CUDA')
-parser = argparse.ArgumentParser()
-parser.add_argument('--input', type=int, default=512, help='size of input size')
-parser.add_argument('--output', type=int, default=512, help='size of output size')
-parser.add_argument('--heads', type=int, default=4, help='number of attention heads')
-parser.add_argument('--batch',  type=int, default=16, help='batch size')
-parser.add_argument('--dropout',  default='0.4', type=float, help='dropout rate')
-parser.add_argument('--alpha',  default='0.15', type=float, help='activation rate')
-parser.add_argument('--lr',  default='0.0001', type=float, help='learning rate')
-parser.add_argument('--epoch',  default=20, type=int, help='max epoch')
-parser.add_argument('--path',  default='./data/', help='path of files')
-parser.add_argument('--result',  default='./result', help='path of results')
+    device = 'cpu'
+print(device)
 
+def main():
+    parser = argparse.ArgumentParser(description='configuraitons')
+    parser.add_argument('--result_path', type=str, default='.', help='output path of model checkpoints')
+    parser.add_argument('--data_path', type=str, default='./mimc', help='input path of processed dataset')
+    parser.add_argument('--embedding_size', type=int, default=256, help='embedding size')
+    parser.add_argument('--num_of_layers', type=int, default=2, help='number of graph layers')
+    parser.add_argument('--num_of_heads', type=int, default=1, help='number of attention heads')
+    parser.add_argument('--lr', type=float, default=1e-4, help='learning rate')
+    parser.add_argument('--batch_size', type=int, default=32, help='batch_size')
+    parser.add_argument('--dropout', type=float, default=0.4, help='dropout')
+    parser.add_argument('--reg', type=str, default="True", help='regularization')
+    parser.add_argument('--lbd', type=int, default=1.0, help='regularization')
 
-opt = parser.parse_args()
+    args = parser.parse_args()
+    result_path = args.result_path
+    data_path = args.data_path
+    in_feature = args.embedding_size
+    out_feature =args.embedding_size
+    n_layers = args.num_of_layers - 1
+    lr = args.lr
+    args.reg = (args.reg == "True")
+    n_heads = args.num_of_heads
+    dropout = args.dropout
+    alpha = 0.1
+    BATCH_SIZE = args.batch_size
+    number_of_epochs = 50
+    eval_freq = 1000
 
-path = opt.path
-epoch = opt.epoch
-BATCH_SIZE = opt.batch
-n_heads = opt.heads
-in_feature = opt.input
-out_feature = opt.output
-BATCH_SIZE = opt.batch
-dropout = opt.dropout
-alpha = opt.alpha
-lr = opt.lr
+    # Load data
+    train_x, train_y = pickle.load(open(data_path + 'train_csr.pkl', 'rb'))
+    val_x, val_y = pickle.load(open(data_path + 'validation_csr.pkl', 'rb'))
+    test_x, test_y = pickle.load(open(data_path + 'test_csr.pkl', 'rb'))
+    train_upsampling = np.concatenate((np.arange(len(train_y)), np.repeat(np.where(train_y == 1)[0], 1)))
+    train_x = train_x[train_upsampling]
+    train_y = train_y[train_upsampling]
 
-num_of_nodes = 3589
-train_idx_name = 'train_idx.pkl'
-val_idx_name = 'val_idx.pkl'
-test_idx_name = 'test_idx.pkl'
+    # Create result root
+    s = datetime.now().strftime('%Y%m%d%H%M%S')
+    result_root = '%s/lr_%s-input_%s-output_%s-dropout_%s'%(result_path, lr, in_feature, out_feature, dropout)
+    if not os.path.exists(result_root):
+        os.mkdir(result_root)
+    for handler in logging.root.handlers[:]:
+        logging.root.removeHandler(handler)
+    logging.basicConfig(filename='%s/train.log' % result_root, format='%(asctime)s %(message)s', level=logging.INFO)
+    logging.info("Time:%s" %(s))
 
-s = datetime.now().strftime('%Y%m%d%H%M%S')
-result_root = '%s/%s-lr_%s-input_%s-output_%s-dropout_%s'%(opt.result, s, opt.lr, opt.input, opt.output, opt.dropout)
-if not os.path.exists(result_root):
-    os.mkdir(result_root)
+    # initialize models
+    num_of_nodes = train_x.shape[1] + 1
+    device_ids = range(torch.cuda.device_count())
+    # eICU has 1 feature on previous readmission that we didn't include in the graph
+    model = VariationalGNN(in_feature, out_feature, num_of_nodes, n_heads, n_layers,
+                           dropout=dropout, alpha=alpha, variational=args.reg, none_graph_features=0).to(device)
+    model = nn.DataParallel(model, device_ids=device_ids)
+    val_loader = DataLoader(dataset=EHRData(val_x, val_y), batch_size=BATCH_SIZE,
+                            collate_fn=collate_fn, num_workers=torch.cuda.device_count(), shuffle=False)
+    optimizer = optim.Adam([p for p in model.parameters() if p.requires_grad], lr=lr, weight_decay=1e-8)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
 
-logging.basicConfig(filename='%s/train.log'%result_root, format='%(asctime)s %(message)s', level=logging.INFO)
-data = OriginalData(path)
-device_ids = list(np.arange(torch.cuda.device_count(), dtype='int'))
-device_ids = range(torch.cuda.device_count())
-model = GAT(in_feature, out_feature, num_of_nodes, n_heads, dropout=dropout, alpha = alpha).to(device)
-model = nn.DataParallel(model, device_ids=device_ids)
-optimizer = optim.Adam([p for p in model.parameters() if p.requires_grad], lr=lr, weight_decay=0)
-scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=[lambda count: 0.9 ** count])
-val_x, val_y = data.datasampler(val_idx_name, train=False)
-val_loader = DataLoader(dataset=EHRData(val_x, val_y), batch_size=BATCH_SIZE,
-                        collate_fn=collate_fn, num_workers=torch.cuda.device_count(), shuffle=False)
-
-for epoch in range(epoch):
-    total_loss = 0
-    x_train, y_train = data.datasampler(train_idx_name, train=True)
-    ratio = Counter(y_train)
-    train_loader = DataLoader(dataset=EHRData(x_train,y_train), batch_size=BATCH_SIZE,
-                              collate_fn=collate_fn, num_workers=torch.cuda.device_count(), shuffle=True)
-    weight = torch.from_numpy((ratio[True]+ratio[False])/(2 * np.array([ratio[False],ratio[True]]))).float().to(device)
-    criterion = nn.CrossEntropyLoss(weight=weight)
-
-    if epoch % 5 == 0:
-        val_auprc = evaluate(model, val_loader, len(val_y))
-        logging.info('epoch:%d AUPRC:%f' % (epoch + 1, val_auprc))
-
-    t = tqdm(iter(train_loader), leave=True, total=len(train_loader))
-    for idx, batch_data in enumerate(t):
-        batch_size = batch_data.size()[0]
-        prev_row = batch_data
-        loss = train(batch_data, model, optimizer, criterion, 5)
-        total_loss += loss * BATCH_SIZE
-        if idx % 50 == 0:
-            t.set_description('[train epoch:%d] loss: %.8f' % (epoch + 1, total_loss))
-            t.refresh()
-    if epoch % 5 == 0:
+    # Train models
+    for epoch in range(number_of_epochs):
+        print("Learning rate:{}".format(optimizer.param_groups[0]['lr']))
+        ratio = Counter(train_y)
+        train_loader = DataLoader(dataset=EHRData(train_x, train_y), batch_size=BATCH_SIZE,
+                                  collate_fn=collate_fn, num_workers=torch.cuda.device_count(), shuffle=True)
+        pos_weight = torch.ones(1).float().to(device) * (ratio[True] / ratio[False])
+        criterion = nn.BCEWithLogitsLoss(reduction="sum", pos_weight=pos_weight)
+        t = tqdm(iter(train_loader), leave=False, total=len(train_loader))
+        model.train()
+        total_loss = np.zeros(3)
+        for idx, batch_data in enumerate(t):
+            loss, kld, bce = train(batch_data, model, optimizer, criterion, arg.lbd, 5)
+            total_loss += np.array([loss, bce, kld])
+            if idx % eval_freq == 0 and idx > 0:
+                torch.save(model.state_dict(), "{}/parameter{}_{}".format(result_root, epoch, idx))
+                val_auprc, _ = evaluate(model, val_loader, len(val_y))
+                logging.info('epoch:%d AUPRC:%f; loss: %.4f, bce: %.4f, kld: %.4f' %
+                             (epoch + 1, val_auprc, total_loss[0]/idx, total_loss[1]/idx, total_loss[2]/idx))
+                print('epoch:%d AUPRC:%f; loss: %.4f, bce: %.4f, kld: %.4f' %
+                      (epoch + 1, val_auprc, total_loss[0]/idx, total_loss[1]/idx, total_loss[2]/idx))
+            if idx % 50 == 0 and idx > 0:
+                t.set_description('[epoch:%d] loss: %.4f, bce: %.4f, kld: %.4f' %
+                                  (epoch + 1, total_loss[0]/idx, total_loss[1]/idx, total_loss[2]/idx))
+                t.refresh()
         scheduler.step()
-    torch.save(model.state_dict(), "%s/parameter%d" % (result_root, epoch + 1))
 
 
-
-
-
-
+if __name__ == '__main__':
+    main()

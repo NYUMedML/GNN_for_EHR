@@ -1,12 +1,14 @@
-# Graph Neural Network on Electronic Health Records for Predicting Alzheimer’s Disease
+# Variationally Regularized Graph-based Representation Learning for Electronic Health Records
 
-This repository contains the code for the paper [Graph Neural Network on Electronic Health Records for Predicting Alzheimer’s Disease](https://arxiv.org/abs/1912.03761).
+This repository contains the code for the paper [Variationally Regularized Graph-based Representation Learning for Electronic Health Records](https://arxiv.org/abs/1912.03761).
 
-![image](https://github.com/NYUMedML/GNN_for_EHR/blob/master/plots/model.png)
+## Introduction
+In this paper, we design a novel graph-based model to generalize the ability of learning implicit medical concept structures to a wide range of data source, including short-term ICU data and long-term outpatient clinical data.We introduce variational regularization for node representation learning, addressing the insufficiency of self-attention in graph-based models, and difficulties of manually constructing knowledge graph from real-world noisy data sources. The novelty of our work is to enhance the learning of attention weights in GNN via regularization on node representations. Besides obtaining better performances in different predictive tasks, we also provide interpretation on the effect of variational regularization in graph neural networks using singular value analysis, and bridge the connection between singular values
+and representation clustering.
+
 
 ## Model Training
 
-These instructions will get you a copy of the project up and running on your local machine for development and testing purposes. See deployment for notes on how to deploy the project on a live system.
 
 ### Prerequisites
 
@@ -20,13 +22,10 @@ Nvidia GPU with Cuda 10.0 are required for training models.
 
 ### Data
 
-A synethic data with same format in [data](https://github.com/NYUMedML/GNN_for_EHR/tree/master/data) folder:
-  - **preprocess_x.pkl**: 1-d EHR data (num_of_patients * num_of_EHRs);
-  - **y_bin.pkl**: AD outcomes in 12-24 months;
-  - **frts_selections.pkl**: indices of features;
-  - **train_idx.pkl, val_idx.pkl, test_idx.pkl**: indices of samples that belongs to train, validation or test sets;
-  - **neg_young.pkl**: indices of young negative samples in training set to be downsampled;
-  - **synethic_data_generator**: the detail format and method of generating synethic data.
+The preprocessing tools that extracts medical code for datasets are enclosed in [data](https://github.com/NYUMedML/GNN_for_EHR/tree/master/data). Run the command:
+```
+python3 preprocess_{dataset}.py --input_path {dataset_path} --output_path {storage_path}
+```
 
 
 ### Train
@@ -34,5 +33,10 @@ A synethic data with same format in [data](https://github.com/NYUMedML/GNN_for_E
 GNN for EHR on predicting disease outcomes can be train by running command:
 
 ```
-python3 train.py --input 512 --output 512 --heads 4 --batch 64 --dropout 0.4 --alpha 0.15 --lr 0.0001
+python3 train.py --data_path {storage_path} --embedding_size 512 --result_path {model_path}
 ```
+
+## Architecture
+
+
+![image](https://github.com/NYUMedML/GNN_for_EHR/blob/master/plots/model.png)
