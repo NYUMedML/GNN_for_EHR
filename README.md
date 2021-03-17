@@ -38,5 +38,4 @@ python3 train.py --data_path {storage_path} --embedding_size 512 --result_path {
 
 ## Architecture
 
-
-![image](https://github.com/NYUMedML/GNN_for_EHR/blob/master/plots/model.png)
+<img src="https://github.com/NYUMedML/GNN_for_EHR/blob/master/plots/model.png" alt="drawing" width="900"/>
