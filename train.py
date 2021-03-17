@@ -88,7 +88,7 @@ def main():
         model.train()
         total_loss = np.zeros(3)
         for idx, batch_data in enumerate(t):
-            loss, kld, bce = train(batch_data, model, optimizer, criterion, arg.lbd, 5)
+            loss, kld, bce = train(batch_data, model, optimizer, criterion, args.lbd, 5)
             total_loss += np.array([loss, bce, kld])
             if idx % eval_freq == 0 and idx > 0:
                 torch.save(model.state_dict(), "{}/parameter{}_{}".format(result_root, epoch, idx))
